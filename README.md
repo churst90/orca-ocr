@@ -24,8 +24,10 @@ framework that landed in Orca 51.
 
 ## Status
 
-**0.2.0**, May 2026. Working and stable on the author's setup
-(Fedora 44, MATE, X11, Voxin TTS). Verified against:
+**0.3.0**, November 2026. Runs on stock upstream Orca built from
+the main branch; no patched Orca build is needed any more. Working and
+stable on the author's setup (Gentoo, MATE, X11, Voxin TTS).
+Earlier versions were verified against:
 - Orca's own preferences dialog (clicked categories)
 - GNOME Calculator
 - Terminal output (mate-terminal, gnome-terminal, kitty)
@@ -35,15 +37,9 @@ framework that landed in Orca 51.
 
 ## Requirements
 
-- **Orca screen reader** with the user-extensions framework. As
-  of this writing the framework's controller API is incomplete
-  upstream; this extension needs four controller methods
-  (`get_active_window`, `get_active_window_screen_rect`,
-  `set_clipboard_text`, `synthesize_mouse_event`) plus the
-  `enter_modal_mode` / `exit_modal_mode` pair, all of which are
-  proposed as upstream issues but currently only exist in the
-  [orca-perf branch](https://github.com/churst90/orca-perf). See
-  "Compatibility" below for details.
+- **Orca built from upstream main, November 2026 or later**, which has the
+  user-extensions framework, extension approval, and the
+  controller and modal-input APIs this extension uses.
 - **Tesseract OCR** plus at least one language data pack:
   - Fedora / RHEL: `sudo dnf install tesseract tesseract-langpack-eng`
   - Debian / Ubuntu: `sudo apt install tesseract-ocr tesseract-ocr-eng`
@@ -56,28 +52,28 @@ framework that landed in Orca 51.
 ```sh
 git clone https://github.com/churst90/orca-ocr.git
 cd orca-ocr
-orca --install-extension ocr.orca-ext
-```
-
-That copies the package to `~/.local/share/orca/extensions/ocr/`,
-records its SHA256 in dconf, and auto-approves it for loading.
-Restart Orca:
-
-```sh
-pkill orca
+mkdir -p ~/.local/share/orca/extensions/ocr
+cp __init__.py ocr.py buffer.py capture.py engine.py manifest.toml \
+   ~/.local/share/orca/extensions/ocr/
+orca --approve-extension ocr
 orca --replace &
 ```
+
+Orca only loads a user extension after it is approved, and the
+approval is pinned to a hash of the package's files. After you
+change or update any of the files, run
+`orca --approve-extension ocr` again and restart Orca.
 
 Then press `Orca+R` on any window with text.
 
 ## Uninstall
 
 ```sh
-orca --uninstall-extension ocr
+orca --revoke-extension ocr
+rm -rf ~/.local/share/orca/extensions/ocr
 ```
 
-Removes the directory, revokes approval, and clears the
-disabled-extensions entry if present.
+Then restart Orca.
 
 ## Usage
 
@@ -149,49 +145,23 @@ broken into focused modules:
 | `capture.py` | Three screen-capture backends: Gdk (X11), ImageMagick (X11), xdg-desktop-portal (Wayland) |
 | `engine.py` | Tesseract subprocess wrapper + TSV parser |
 
-Every Orca-internal capability the extension uses goes through
-the controller API — `self.controller.get_active_window()`,
-`self.controller.set_clipboard_text()`,
-`self.controller.synthesize_mouse_event()`,
-`self.controller.enter_modal_mode()`, etc. There are no direct
-imports of `focus_manager`, `clipboard`, `ax_device_manager`,
-or `command_manager`. This makes the extension a clean reference
-for what's possible with the user-extensions framework.
+Orca-internal capabilities go through public APIs: the
+extension controller (`present_message_internal`,
+`get_active_window_internal`, `set_clipboard_text_internal`),
+`command_manager` for the OCR-mode keys, and AT-SPI directly for
+window extents and mouse clicks.
 
-## Compatibility
+## How OCR mode claims the NumPad
 
-The user-extension framework's controller API has gaps that
-this extension fills with proposals filed against upstream Orca.
-None are merged yet; until they are, this extension only works
-on the perf branch.
-
-| Controller method | Upstream status |
-|---|---|
-| `present_message_internal` | ✓ in main |
-| `get_active_window` / `_screen_rect` | proposed, not merged |
-| `set_clipboard_text` / `get_clipboard_text` | proposed, not merged |
-| `synthesize_mouse_event` | proposed, not merged |
-| `enter_modal_mode` / `exit_modal_mode` | proposed, not merged |
-
-If you're on stock upstream Orca, the extension will load
-(the loader is forgiving) but pressing `Orca+R` will raise
-`AttributeError` on the first controller call.
-
-Use [orca-perf](https://github.com/churst90/orca-perf) in the
-meantime, or wait for the upstream issues to land.
-
-## Building from source
-
-If you've changed any of the `.py` files and want to repackage:
-
-```sh
-./build-orca-ext.sh . ocr.orca-ext
-# wrote ./ocr.orca-ext (10924 bytes)
-```
-
-The script zips the current directory into a deterministic
-archive (sorted entries, no extended attributes) suitable for
-distribution.
+The OCR-mode keys are NumPad keys, which flat review already
+uses. Orca removes a user extension's binding when a built-in
+command owns the same key, so the extension can't simply bind
+them. Instead, while OCR mode is on, it registers itself as
+Orca's modal input handler and claims those keys before flat
+review sees them. Mode commands whose keys nothing else uses
+stay registered in an `ocr-mode` activation group, which is only
+active during OCR mode. Leaving OCR mode (`KP_Subtract`) hands
+the NumPad back to flat review.
 
 ## License
 
@@ -204,8 +174,5 @@ Cody Hurst &lt;codythurst@gmail.com&gt;.
 Bug reports and feature requests: [github issues](https://github.com/churst90/orca-ocr/issues).
 
 Related projects:
-- [orca-perf](https://github.com/churst90/orca-perf) — the perf
-  branch of Orca that this extension is developed against, plus
-  the proposed upstream API additions this extension uses.
 - [GNOME Orca upstream](https://gitlab.gnome.org/GNOME/orca) —
   where the extension framework lives.

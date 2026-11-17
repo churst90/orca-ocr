@@ -1,10 +1,10 @@
 [extension]
 name = "ocr"
 display-name = "OCR (Optical Character Recognition)"
-version = "0.2.0"
+version = "0.3.0"
 author = "Cody Hurst <codythurst@gmail.com>"
 license = "LGPL-2.1-or-later"
-url = "https://github.com/churst90/orca-perf"
+url = "https://github.com/churst90/orca-ocr"
 description = """
 NVDA-style OCR for Orca. Press Orca+R to capture the focused
 window, recognize the text via Tesseract, and navigate the result
@@ -15,7 +15,7 @@ and NumPad *.
 
 [compatibility]
 min-orca = "51.alpha"
-last-tested-orca = "51.alpha"
+last-tested-orca = "51 (git 2026-11-17)"
 
 [entry]
 module = "ocr"

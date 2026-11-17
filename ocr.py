@@ -22,7 +22,7 @@ import gi
 gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi, GLib  # noqa: E402
 
-from orca import debug, keybindings  # noqa: E402
+from orca import command_manager, debug, keybindings  # noqa: E402
 from orca.command import Command, KeyboardCommand  # noqa: E402
 from orca.extension import Extension  # noqa: E402
 
@@ -48,6 +48,7 @@ class OcrExtension(Extension):
     """OCR user extension. See package README for usage."""
 
     GROUP_LABEL = "OCR"
+    _MODE_GROUP = "ocr-mode"
 
     _MODE_KEYS: list[tuple[str, int, str]] = [
         ("KP_Up",        keybindings.NO_MODIFIER_MASK,    "go_previous_line"),
@@ -81,6 +82,7 @@ class OcrExtension(Extension):
         self._mode_active: bool = False
         self._pending_pid: int | None = None
         self._pending_context: dict | None = None
+        self._mode_bindings: dict[tuple[str, int], keybindings.KeyBinding] = {}
         super().__init__()
 
     # ---- command registration --------------------------------------
@@ -108,8 +110,9 @@ class OcrExtension(Extension):
                 f"OCR: {attr.replace('_', ' ')} ({keysym}, mod={mod})",
                 desktop_keybinding=keybindings.KeyBinding(keysym, mod),
                 laptop_keybinding=keybindings.KeyBinding(keysym, mod),
+                suspended=True,
+                activation_group=self._MODE_GROUP,
             )
-            cmd.set_suspended(True)
             commands.append(cmd)
         return commands
 
@@ -131,11 +134,11 @@ class OcrExtension(Extension):
         if not is_available():
             self._say("OCR unavailable: tesseract is not installed.")
             return True
-        window = self.controller.get_active_window()
+        window = self.controller.get_active_window_internal()
         if window is None:
             self._say("OCR: no focused window.")
             return True
-        screen_rect = self.controller.get_active_window_screen_rect()
+        screen_rect = self._get_screen_rect(window)
         if screen_rect is None:
             self._say("OCR: cannot determine window position.")
             return True
@@ -215,7 +218,12 @@ class OcrExtension(Extension):
         self._source_window = ctx["window"]
         self._cursor = (0, 0, 0)
         self._anchor = None
-        self._activate_mode_keys()
+        if not self._activate_mode_keys():
+            self._buffer = None
+            self._source_window = None
+            self._cursor = None
+            self._say("OCR: another Orca mode is active, such as learn mode.")
+            return
         self._mode_active = True
         first = self._current_word()
         first_text = first.text if first is not None else ""
@@ -234,14 +242,69 @@ class OcrExtension(Extension):
         self._say("OCR mode off.")
         return True
 
-    # ---- modal key activation -- via controller --------------------
+    # ---- modal key activation -------------------------------------
+    #
+    # Orca drops an extension's binding when a built-in command already uses
+    # the key (the NumPad keys belong to flat review), so the mode keys can't
+    # rely on their own commands. Instead, while OCR mode is on, this
+    # extension is Orca's modal input handler and claims the mode keys before
+    # flat review sees them. Mode commands whose keys are free stay registered
+    # so they get grabbed: Orca only consults an extension's modal handler for
+    # keys that some active command is bound to.
 
-    def _activate_mode_keys(self) -> None:
-        target_pairs = [(k, m) for k, m, _ in self._MODE_KEYS]
-        self.controller.enter_modal_mode(self, target_pairs)
+    def _activate_mode_keys(self) -> bool:
+        manager = command_manager.get_manager()
+        manager.set_group_suspended(self._MODE_GROUP, False)
+        if manager.set_modal_handler(self):
+            return True
+        manager.set_group_suspended(self._MODE_GROUP, True)
+        return False
 
     def _deactivate_mode_keys(self) -> None:
-        self.controller.exit_modal_mode(self)
+        manager = command_manager.get_manager()
+        manager.clear_modal_handler(self)
+        manager.set_group_suspended(self._MODE_GROUP, True)
+
+    def _mode_key_for_event(self, event) -> str | None:
+        """Returns the name of the method bound to event in OCR mode, or None."""
+
+        for keysym, mod, attr in self._MODE_KEYS:
+            binding = self._mode_bindings.get((keysym, mod))
+            if binding is None:
+                binding = keybindings.KeyBinding(keysym, mod)
+                self._mode_bindings[(keysym, mod)] = binding
+            if binding.matches(event.id, event.hw_code, event.modifiers):
+                return attr
+        return None
+
+    def will_handle_event(self, script, event, command) -> bool:
+        """Modal handler: claims the OCR mode keys while OCR mode is on."""
+
+        return self._mode_active and self._mode_key_for_event(event) is not None
+
+    def handle_event(self, script, event, command) -> bool:
+        """Modal handler: runs the OCR method bound to the claimed key."""
+
+        attr = self._mode_key_for_event(event)
+        if attr is None:
+            return False
+        return getattr(self, attr)()
+
+    def on_disabled(self) -> None:
+        if self._mode_active:
+            self._deactivate_mode_keys()
+            self._mode_active = False
+
+    @staticmethod
+    def _get_screen_rect(window: Atspi.Accessible) -> tuple[int, int, int, int] | None:
+        """Returns (x, y, width, height) of window in screen coordinates."""
+
+        try:
+            rect = Atspi.Component.get_extents(window, Atspi.CoordType.SCREEN)
+        except GLib.Error as error:
+            debug.print_message(debug.LEVEL_INFO, f"OCR: get_extents failed: {error}", True)
+            return None
+        return (int(rect.x), int(rect.y), int(rect.width), int(rect.height))
 
     # ---- cursor helpers --------------------------------------------
 
@@ -536,7 +599,7 @@ class OcrExtension(Extension):
         if not text:
             self._say("Nothing to copy.")
             return True
-        self.controller.set_clipboard_text(text)
+        self.controller.set_clipboard_text_internal(text)
         preview = text if len(text) <= 60 else text[:50] + "..."
         self._say(f"Copied {label}: {preview}")
         return True
@@ -562,9 +625,13 @@ class OcrExtension(Extension):
             return True
         screen_x = word.screen_x + word.width // 2
         screen_y = word.screen_y + word.height // 2
-        ok = self.controller.synthesize_mouse_event(
-            screen_x, screen_y, button,
-        )
+        try:
+            ok = Atspi.generate_mouse_event(
+                screen_x, screen_y, "b1c" if button == "left" else "b3c",
+            )
+        except GLib.Error as error:
+            debug.print_message(debug.LEVEL_INFO, f"OCR: mouse event failed: {error}", True)
+            ok = False
         if not ok:
             self._say(f"OCR: {verb.lower()} did not reach the window.")
             return True

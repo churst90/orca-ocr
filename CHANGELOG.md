@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0 — 2026-11-17
+
+Runs on stock upstream Orca (51.x); the orca-perf fork is no longer needed.
+
+- OCR mode keys are handled through Orca's modal input handler. Upstream
+  drops an extension's binding when a built-in command (flat review on the
+  NumPad) already owns the key, so the extension now claims those keys
+  itself while OCR mode is on.
+- Uses upstream controller calls (`get_active_window_internal`,
+  `set_clipboard_text_internal`) and AT-SPI directly for window extents
+  and mouse clicks, replacing the fork-only controller hooks.
+- Leaves OCR mode cleanly when the extension is disabled.
+- `__init__.py` exports the extension class, which the upstream loader needs.
+- Removed `ocr.orca-ext` and `build-orca-ext.sh`: upstream Orca has no
+  `--install-extension`. Install by copying the files and running
+  `orca --approve-extension ocr` (see README).
+
 ## 0.2.0 — 2026-05-20
 
 Initial public release as a standalone repo, split out from the

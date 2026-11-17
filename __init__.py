@@ -5,3 +5,7 @@
 # Python tooling (linters, type checkers, IDEs) also recognize the
 # directory as a package; it's not strictly required by the loader
 # itself.
+
+from .ocr import OcrExtension
+
+__all__ = ["OcrExtension"]
